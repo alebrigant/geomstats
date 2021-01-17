@@ -2,6 +2,7 @@
 
 import logging
 import math
+from time import time  # added
 
 from sklearn.base import BaseEstimator
 
@@ -280,7 +281,8 @@ def _adaptive_gradient_descent(points,
 
     points = gs.to_ndarray(points, to_ndim=2)
 
-    current_mean = points[0] if init_point is None else init_point
+    current_mean = gs.mean(points, 0) if init_point is None else init_point
+    # current_mean = points[0] if init_point is None else init_point
 
     if n_points == 1:
         return current_mean
@@ -298,13 +300,24 @@ def _adaptive_gradient_descent(points,
     sq_norm_current_tangent_mean = metric.squared_norm(
         current_tangent_mean, base_point=current_mean)
 
+    print('Iteration 0 completed.')  # added
+    tau_list = []  # added
+    current_mean_list = []  # added
+    current_tangent_mean_list = []  # added
+    current_mean_list.append(current_mean)  # added
+    current_tangent_mean_list.append(current_tangent_mean)  # added
+
     while (sq_norm_current_tangent_mean > epsilon ** 2
            and iteration < max_iter):
         iteration += 1
+        t0 = time()  # added
+        print('Starting iteration {}...'.format(iteration))  # added
 
         shooting_vector = tau * current_tangent_mean
         next_mean = metric.exp(
             tangent_vec=shooting_vector, base_point=current_mean)
+
+        print('Next mean is {}'.format(next_mean))  # added
 
         logs = metric.log(point=points, base_point=next_mean)
         next_tangent_mean = gs.einsum('n,nj->j', weights, logs)
@@ -312,19 +325,28 @@ def _adaptive_gradient_descent(points,
         sq_norm_next_tangent_mean = metric.squared_norm(
             next_tangent_mean, base_point=next_mean)
 
+        dt = time() - t0  # added
+        print('Iteration {} completed in {}s, error is {}.'.format(
+            iteration, dt, sq_norm_next_tangent_mean**(1 / 2)))  # added
         if sq_norm_next_tangent_mean < sq_norm_current_tangent_mean:
             current_mean = next_mean
             current_tangent_mean = next_tangent_mean
             sq_norm_current_tangent_mean = sq_norm_next_tangent_mean
             tau = min(tau_max, tau_mul_up * tau)
         else:
+            print('No update.')
             tau = max(tau_min, tau_mul_down * tau)
+
+        tau_list.append(tau)  # added
+        current_mean_list.append(current_mean)  # added
+        current_tangent_mean_list.append(current_tangent_mean)  # added
 
     if iteration == max_iter:
         logging.warning(
             'Maximum number of iterations {} reached. '
             'The mean may be inaccurate'.format(max_iter))
-    return current_mean
+    return current_mean, current_mean_list, current_tangent_mean_list,\
+        tau_list  # added
 
 
 class FrechetMean(BaseEstimator):
@@ -409,7 +431,7 @@ class FrechetMean(BaseEstimator):
             mean = _adaptive_gradient_descent(
                 points=X, weights=weights, metric=self.metric,
                 max_iter=self.max_iter,
-                epsilon=1e-12)
+                epsilon=self.epsilon)
         elif self.method == 'frechet-poincare-ball':
             mean = _ball_gradient_descent(
                 points=X, weights=weights, metric=self.metric,
