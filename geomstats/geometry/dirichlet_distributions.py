@@ -201,7 +201,9 @@ class DirichletMetric(RiemannianMetric):
         Returns
         -------
         christoffels : array-like, shape=[..., dim, dim, dim]
-            Christoffel symbols.
+            Christoffel symbols, with:
+            :math: jac[..., i, j, k] = 'Gamma^i_{jk}'
+
         """
         base_point = gs.to_ndarray(base_point, to_ndim=2)
         n_points = base_point.shape[0]
@@ -236,6 +238,78 @@ class DirichletMetric(RiemannianMetric):
         christoffels = gs.stack(christoffels, 1)
 
         return gs.squeeze(christoffels)
+
+    def jac_christoffels(self, base_point):
+        """Compute the jacobian of the Christoffel symbols.
+
+        Compute the Jacobian of the Christoffel symbols of the
+        Fisher information metric.
+
+        Parameters
+        ----------
+        base_point : array-like, shape=[..., dim]
+            Base point.
+
+        Returns
+        -------
+        jac : array-like, shape=[..., dim, dim, dim, dim]
+            Jacobian of the Christoffel symbols.
+            :math: jac[..., i, j, k, l] = 'dGamma^i_{jk} / dx_l'
+        """
+        n_dim = base_point.ndim
+        position = gs.transpose(base_point)
+        t_param = gs.sum(position, 0)
+        f_y = 1 / gs.polygamma(1, position)
+        f_t = 1 / gs.polygamma(1, t_param)
+        df_y = - gs.polygamma(2, position) / gs.polygamma(1, position)**2
+        df_t = - gs.polygamma(2, t_param) / gs.polygamma(1, t_param)**2
+        g_y = df_y / f_y
+        g_t = df_t / f_t
+        dg_y = (gs.polygamma(2, position)**2 - gs.polygamma(1, position) *
+                gs.polygamma(3, position)) / gs.polygamma(1, position)**2
+        dg_t = (gs.polygamma(2, t_param)**2 - gs.polygamma(1, t_param) *
+                gs.polygamma(3, t_param)) / gs.polygamma(1, t_param)**2
+        const = f_t - gs.sum(f_y, 0)
+
+        jac_1 = f_y * dg_t / const
+        jac_1_mat = gs.squeeze(
+            gs.tile(jac_1, (self.dim, self.dim, self.dim, 1, 1)))
+        jac_2 = - g_t / const**2 * gs.einsum(
+            'j...,i...->ji...', df_t - df_y, f_y)
+        jac_2_mat = gs.squeeze(
+            gs.tile(jac_2, (self.dim, self.dim, 1, 1, 1)))
+        jac_3 = df_y * g_t / const
+        jac_3_mat = gs.transpose(
+            from_vector_to_diagonal_matrix(gs.transpose(jac_3)))
+        jac_3_mat = gs.squeeze(
+            gs.tile(jac_3_mat, (self.dim, self.dim, 1, 1, 1)))
+        jac_4 = 1 / const**2 * gs.einsum(
+            'k...,j...,i...->kji...', g_y, df_t - df_y, f_y)
+        jac_4_mat = gs.transpose(
+            from_vector_to_diagonal_matrix(gs.transpose(jac_4)))
+        jac_5 = - gs.einsum('j...,i...->ji...', dg_y, f_y) / const
+        jac_5_mat = from_vector_to_diagonal_matrix(
+            gs.transpose(jac_5))
+        jac_5_mat = gs.transpose(from_vector_to_diagonal_matrix(
+            jac_5_mat))
+        jac_6 = - gs.einsum('k...,j...->kj...', g_y, df_y) / const
+        jac_6_mat = gs.transpose(from_vector_to_diagonal_matrix(
+            gs.transpose(jac_6)))
+        jac_6_mat = gs.transpose(from_vector_to_diagonal_matrix(
+            gs.transpose(jac_6_mat, [0, 1, 3, 2])), [0, 1, 3, 4, 2]) \
+            if n_dim > 1 else from_vector_to_diagonal_matrix(
+            jac_6_mat)
+        jac_7 = - from_vector_to_diagonal_matrix(gs.transpose(dg_y))
+        jac_7_mat = from_vector_to_diagonal_matrix(jac_7)
+        jac_7_mat = gs.transpose(
+            from_vector_to_diagonal_matrix(jac_7_mat))
+
+        jac = 1 / 2 * (
+            jac_1_mat + jac_2_mat + jac_3_mat +
+            jac_4_mat + jac_5_mat + jac_6_mat + jac_7_mat)
+
+        return gs.transpose(jac, [3, 1, 0, 2]) if n_dim == 1 else \
+            gs.transpose(jac, [4, 3, 1, 0, 2])
 
     def _geodesic_ivp(self, initial_point, initial_tangent_vec):
         """Solve geodesic initial value problem.
@@ -333,7 +407,7 @@ class DirichletMetric(RiemannianMetric):
 
         return exp
 
-    def _geodesic_bvp(self, initial_point, end_point):
+    def _geodesic_bvp(self, initial_point, end_point, jacobian=False):
         """Solve geodesic boundary problem.
 
         Compute the parameterized function for the geodesic starting at
@@ -353,7 +427,6 @@ class DirichletMetric(RiemannianMetric):
             Parameterized function for the geodesic curve starting at
             initial_point and ending at end_point.
         """
-        jacobian = True
         initial_point = gs.to_ndarray(initial_point, to_ndim=2)
         end_point = gs.to_ndarray(end_point, to_ndim=2)
         n_initial_points = initial_point.shape[0]
@@ -374,7 +447,7 @@ class DirichletMetric(RiemannianMetric):
 
             Parameters
             ----------
-            state :  array-like, shape[2*dim,]
+            state :  array-like, shape=[2*dim,...]
                 Vector of the state variables (position and speed)
             _ :  unused
                 Any (time).
@@ -394,85 +467,33 @@ class DirichletMetric(RiemannianMetric):
 
             Parameters
             ----------
-            state :  array-like, shape[2*dim,]
+            state :  array-like, shape=[2*dim, ...]
                 Vector of the state variables (position and speed)
             _ :  unused
                 Any (time).
+
+            Returns
+            -------
+            jac : array-like, shape=[dim, dim, ...]
             """
             n_dim = state.ndim
             n_times = state.shape[1] if n_dim > 1 else 1
             position, velocity = state[:self.dim], state[self.dim:]
 
-            t_param = gs.sum(position, 0)
-            f_y = 1 / gs.polygamma(1, position)
-            f_t = 1 / gs.polygamma(1, t_param)
-            df_y = - gs.polygamma(2, position) / gs.polygamma(1, position)**2
-            df_t = - gs.polygamma(2, t_param) / gs.polygamma(1, t_param)**2
-            g_y = df_y / f_y
-            g_t = df_t / f_t
-            dg_y = (gs.polygamma(2, position)**2 - gs.polygamma(1, position) *
-                    gs.polygamma(3, position)) / gs.polygamma(1, position)**2
-            dg_t = (gs.polygamma(2, t_param)**2 - gs.polygamma(1, t_param) *
-                    gs.polygamma(3, t_param)) / gs.polygamma(1, t_param)**2
-            const = f_t - gs.sum(f_y, 0)
+            dgamma = self.jac_christoffels(gs.transpose(position))
 
-            dgamma_1 = f_y * dg_t / const
-            dgamma_1_mat = gs.squeeze(
-                gs.tile(dgamma_1, (self.dim, self.dim, self.dim, 1, 1)))
-            dgamma_2 = - g_t / const**2 * gs.einsum(
-                'j...,i...->ji...', df_t - df_y, f_y)
-            dgamma_2_mat = gs.squeeze(
-                gs.tile(dgamma_2, (self.dim, self.dim, 1, 1, 1)))
-            dgamma_3 = df_y * g_t / const
-            dgamma_3_mat = gs.transpose(
-                from_vector_to_diagonal_matrix(gs.transpose(dgamma_3)))
-            dgamma_3_mat = gs.squeeze(
-                gs.tile(dgamma_3_mat, (self.dim, self.dim, 1, 1, 1)))
-            dgamma_4 = 1 / const**2 * gs.einsum(
-                'k...,j...,i...->kji...', g_y, df_t - df_y, f_y)
-            dgamma_4_mat = gs.transpose(
-                from_vector_to_diagonal_matrix(gs.transpose(dgamma_4)))
-            dgamma_5 = - gs.einsum('j...,i...->ji...', dg_y, f_y) / const
-            dgamma_5_mat = from_vector_to_diagonal_matrix(
-                gs.transpose(dgamma_5))
-            dgamma_5_mat = gs.transpose(from_vector_to_diagonal_matrix(
-                dgamma_5_mat))
-            dgamma_6 = - gs.einsum('k...,j...->kj...', g_y, df_y) / const
-            dgamma_6_mat = gs.transpose(from_vector_to_diagonal_matrix(
-                gs.transpose(dgamma_6)))
-            dgamma_6_mat = gs.transpose(from_vector_to_diagonal_matrix(
-                gs.transpose(dgamma_6_mat, [0, 1, 3, 2])), [0, 1, 3, 4, 2]) \
-                if n_dim > 1 else from_vector_to_diagonal_matrix(
-                dgamma_6_mat)
-            dgamma_7 = - from_vector_to_diagonal_matrix(gs.transpose(dg_y))
-            dgamma_7_mat = from_vector_to_diagonal_matrix(dgamma_7)
-            dgamma_7_mat = gs.transpose(
-                from_vector_to_diagonal_matrix(dgamma_7_mat))
+            df_dposition = - gs.einsum(
+                'j...,...ijkl,k...->il...', velocity, dgamma, velocity)
 
-            # dgamma[l, k, j, i, ...]
-            dgamma = 1 / 2 * (
-                dgamma_1_mat + dgamma_2_mat + dgamma_3_mat +
-                dgamma_4_mat + dgamma_5_mat + dgamma_6_mat + dgamma_7_mat)
-
-            # df_dp[..., i, j]
-            # = (velocity[l] * dgamma[l, k, j, i] * velocity[k]).T
-            df_dposition = - gs.transpose(gs.einsum(
-                'l...,lkji...,k...->ji...', velocity, dgamma, velocity))
-
-            # gamma[..., i, j, k]
-            gamma_3d = self.christoffels(gs.transpose(position))
-            gamma_2d = gs.diagonal(gamma_3d, axis1=-2, axis2=-1)
-            df_dvelocity = - gs.einsum(
-                '...ij,...j->...ij', gamma_2d, gs.transpose(velocity)) \
-                - gs.einsum(
-                '...ijk,...k->...ij', gamma_3d, gs.transpose(velocity))
+            gamma = self.christoffels(gs.transpose(position))
+            df_dvelocity = - 2 * gs.einsum(
+                '...ijk,k...->ij...', gamma, velocity)
 
             jac = gs.zeros((2 * self.dim,) + state.shape)
-            # gs.squeeze(gs.zeros((2 * self.dim, 2 * self.dim, n_times)))
             jac[:self.dim, self.dim:, ...] = gs.squeeze(gs.transpose(gs.tile(
                 gs.eye(self.dim), (n_times, 1, 1))))
-            jac[self.dim:, :self.dim, ...] = gs.transpose(df_dposition)
-            jac[self.dim:, self.dim:, ...] = gs.transpose(df_dvelocity)
+            jac[self.dim:, :self.dim, ...] = df_dposition
+            jac[self.dim:, self.dim:, ...] = df_dvelocity
 
             return jac
 
@@ -529,7 +550,7 @@ class DirichletMetric(RiemannianMetric):
 
         return path
 
-    def log(self, point, base_point, n_steps=N_STEPS):
+    def log(self, point, base_point, n_steps=N_STEPS, jacobian=False):
         """Compute the logarithm map.
 
         Compute logarithm map associated to the Fisher information metric by
@@ -555,7 +576,7 @@ class DirichletMetric(RiemannianMetric):
         stop_time = 1.
         t = gs.linspace(0, stop_time, n_steps)
         geodesic = self._geodesic_bvp(
-            initial_point=base_point, end_point=point)
+            initial_point=base_point, end_point=point, jacobian=jacobian)
         geodesic_at_t = geodesic(t)
         log = n_steps * (geodesic_at_t[..., 1, :] - geodesic_at_t[..., 0, :])
 
