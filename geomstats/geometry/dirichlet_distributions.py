@@ -1,7 +1,9 @@
 """Statistical Manifold of Dirichlet distributions with the Fisher metric."""
 
-from time import time
+import multiprocessing
+import time
 
+import numpy as np
 from scipy.integrate import odeint
 from scipy.integrate import solve_bvp
 from scipy.stats import dirichlet
@@ -526,25 +528,42 @@ class DirichletMetric(RiemannianMetric):
             niter = 0
             for ip, ep in zip(initial_point, end_point):
                 niter += 1
-                t0 = time()
+                t0 = time.time()
                 geodesic_init = initialize(ip, ep)
 
                 def bc(y0, y1, ip=ip, ep=ep):
                     return boundary_cond(y0, y1, ip, ep)
 
-                if jacobian:
-                    solution = solve_bvp(
-                        bvp, bc, t, geodesic_init, fun_jac=jac, verbose=0)
-                else:
-                    solution = solve_bvp(
-                        bvp, bc, t, geodesic_init, verbose=0)
-                solution_at_t = solution.sol(t)
-                geodesic = solution_at_t[:self.dim, :]
-                geod.append(gs.transpose(geodesic))
+                def process_function(return_dict):
+                    if jacobian:
+                        solution = solve_bvp(
+                            bvp, bc, t, geodesic_init, fun_jac=jac, verbose=0)
+                    else:
+                        solution = solve_bvp(
+                            bvp, bc, t, geodesic_init, verbose=0)
+                    solution_at_t = solution.sol(t)
+                    geodesic = solution_at_t[:self.dim, :]
+                    geod.append(gs.transpose(geodesic))
 
-                dt = time() - t0
-                print('Distance {} computed in {}s.'.format(niter, dt),
-                      end='\r')
+                    dt = time.time() - t0
+                    print('Distance {} computed in {}s.'.format(niter, dt),
+                          end='\r')
+
+                    return_dict[0] = geod
+
+                manager = multiprocessing.Manager()
+                return_dict = manager.dict()
+                p = multiprocessing.Process(
+                    target=process_function, args=(return_dict,))
+                p.start()
+
+                p.join(30)
+                if p.is_alive():
+                    p.terminate()
+                    print('Too long, process terminated.')
+                    geod.append(gs.zeros((n_steps, self.dim)))
+                else:
+                    geod = return_dict[0]
 
             return geod[0] if len(initial_point) == 1 else gs.stack(geod)
 
@@ -623,3 +642,69 @@ class DirichletMetric(RiemannianMetric):
             path = self._geodesic_ivp(initial_point, initial_tangent_vec)
 
         return path
+
+    def curvature_tensor(self, base_point):
+        """Compute Riemannian curvature tensor.
+
+        Parameters
+        ----------
+        base_point : array-like, shape=[..., dim]
+            Point at which to compute the crvature tensor.
+
+        Returns
+        -------
+        curv_tensor : array-like, shape=[..., dim, dim, dim, dim]
+            Curvature tensor at base_point.
+        """
+        curv_tensor = gs.zeros((self.dim, self.dim, self.dim, self.dim))
+        t_param = gs.sum(base_point, -1)
+        f_y = 1 / gs.polygamma(1, base_point)
+        f_t = 1 / gs.polygamma(1, t_param)
+        df_y = - gs.polygamma(2, base_point) / gs.polygamma(1, base_point)**2
+        df_t = - gs.polygamma(2, t_param) / gs.polygamma(1, t_param)**2
+        den = f_t - gs.sum(f_y, -1)
+
+        def curv_ij(i, j):
+            num = (
+                f_y[..., i] * df_y[..., j] * df_t +
+                f_y[..., j] * df_y[..., i] * df_t -
+                f_t * df_y[..., i] * df_y[..., j])
+            return num / (4 * f_y[..., i] * f_y[..., j] * f_t * den)
+
+        def curv_i(i):
+            return df_y[..., i] * df_t / (4 * den * f_y[..., i] * f_t)
+
+        for i in range(self.dim):
+            curv_tensor_i = curv_i(i)
+            for j in range(self.dim):
+                if j != i:
+                    curv_tensor_j = curv_i(j)
+                    curv_tensor_ij = curv_ij(i, j)
+                    curv_tensor[i, j, i, j] = curv_tensor_ij
+                    curv_tensor[i, j, j, i] = - curv_tensor_ij
+                    for k in range(self.dim):
+                        if k != i and k != j:
+                            curv_tensor[i, j, i, k] = curv_tensor_i
+                            curv_tensor[i, j, k, i] = - curv_tensor_i
+                            curv_tensor[i, j, k, j] = curv_tensor_j
+                            curv_tensor[i, j, j, k] = - curv_tensor_j
+        return curv_tensor
+
+    def metric_det(self, base_point):
+        """Compute determinant of metric matrix.
+
+        Parameters
+        ----------
+        base_point : array-like, shape=[..., dim]
+            Point at which to compute the crvature tensor.
+
+        Returns
+        -------
+        det : float
+            Determinant of metric matrix at base_point.
+        """
+        t_param = gs.sum(base_point, -1)
+        f_y = 1 / gs.polygamma(1, base_point)
+        f_t = 1 / gs.polygamma(1, t_param)
+        det = (f_t - gs.sum(f_y, -1)) / (f_t * np.prod(f_y, -1))
+        return det

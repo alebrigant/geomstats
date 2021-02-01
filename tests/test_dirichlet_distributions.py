@@ -16,6 +16,7 @@ class TestDirichletDistributions(geomstats.tests.TestCase):
         warnings.simplefilter('ignore', category=UserWarning)
         self.dim = 3
         self.dirichlet = DirichletDistributions(self.dim)
+        self.beta = DirichletDistributions(2)
         self.metric = DirichletMetric(self.dim)
         self.n_points = 10
         self.n_samples = 20
@@ -116,9 +117,8 @@ class TestDirichletDistributions(geomstats.tests.TestCase):
 
         Check the metric matrix in dimension 2.
         """
-        dirichlet2 = DirichletDistributions(2)
-        points = dirichlet2.random_uniform(self.n_points)
-        result = dirichlet2.metric.metric_matrix(points)
+        points = self.beta.random_uniform(self.n_points)
+        result = self.beta.metric.metric_matrix(points)
 
         param_a = points[:, 0]
         param_b = points[:, 1]
@@ -139,9 +139,8 @@ class TestDirichletDistributions(geomstats.tests.TestCase):
         Check the Christoffel symbols in dimension 2.
         """
         gs.random.seed(123)
-        dirichlet2 = DirichletDistributions(2)
-        points = dirichlet2.random_uniform(self.n_points)
-        result = dirichlet2.metric.christoffels(points)
+        points = self.beta.random_uniform(self.n_points)
+        result = self.beta.metric.christoffels(points)
 
         def coefficients(param_a, param_b):
             poly1a = gs.polygamma(1, param_a)
@@ -331,4 +330,43 @@ class TestDirichletDistributions(geomstats.tests.TestCase):
             self.metric.jac_christoffels(base_points[0, :]),
             self.metric.jac_christoffels(base_points[1, :])]
         expected = gs.stack(expected, 0)
+        self.assertAllClose(expected, result)
+
+    def test_curvature_tensor(self):
+        """
+        Test curvature tensor in dimension 2.
+
+        Check the sectional curvature computed from the
+        curvature tensor in dimension 2.
+        """
+        base_point = self.beta.random_uniform()
+        x_param = base_point[0]
+        y_param = base_point[1]
+        t_param = x_param + y_param
+        detg = (gs.polygamma(1, x_param) * gs.polygamma(1, y_param) -
+                gs.polygamma(1, x_param) * gs.polygamma(1, t_param) -
+                gs.polygamma(1, y_param) * gs.polygamma(1, t_param))
+        sec1 = (gs.polygamma(2, x_param) * gs.polygamma(2, y_param) *
+                gs.polygamma(2, t_param)) / (4 * detg ** 2)
+        sec2 = (gs.polygamma(1, x_param) / gs.polygamma(2, x_param) +
+                gs.polygamma(1, y_param) / gs.polygamma(2, y_param) -
+                gs.polygamma(1, t_param) / gs.polygamma(2, t_param))
+        expected = sec1 * sec2
+
+        curv = self.beta.metric.curvature_tensor(base_point)
+        result = curv[0, 1, 0, 1] / detg
+        self.assertAllClose(expected, result)
+
+    def test_curvature_approx(self):
+        pt_a = self.dirichlet.random_uniform()
+        pt_b = self.dirichlet.random_uniform()
+        pt_c = (pt_a + pt_b) / 2
+        vec_a = self.dirichlet.metric.log(point=pt_a, base_point=pt_c)
+        vec_b = self.dirichlet.metric.log(point=pt_b, base_point=pt_c)
+        diff = self.dirichlet.metric.squared_norm(
+            vector=(vec_a - vec_b), base_point=pt_c)
+        curv = self.dirichlet.metric.curvature_tensor(base_point=pt_c)
+        result = diff + 1 / 3 * gs.einsum(
+            'i,j,k,l,ijkl', vec_a, vec_b, vec_a, vec_b, curv)
+        expected = self.dirichlet.metric.dist(pt_a, pt_b)**2
         self.assertAllClose(expected, result)
