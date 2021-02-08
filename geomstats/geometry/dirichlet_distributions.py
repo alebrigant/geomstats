@@ -557,7 +557,7 @@ class DirichletMetric(RiemannianMetric):
                     target=process_function, args=(return_dict,))
                 p.start()
 
-                p.join(300)
+                p.join(30)
                 if p.is_alive():
                     p.terminate()
                     print('Too long, process terminated.')
