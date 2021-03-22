@@ -16,6 +16,7 @@ from geomstats.geometry.euclidean import Euclidean
 from geomstats.geometry.riemannian_metric import RiemannianMetric
 
 N_STEPS = 100
+TIMER = 30
 
 
 class DirichletDistributions(EmbeddedManifold):
@@ -409,7 +410,8 @@ class DirichletMetric(RiemannianMetric):
 
         return exp
 
-    def _geodesic_bvp(self, initial_point, end_point, jacobian=False):
+    def _geodesic_bvp(self, initial_point, end_point, jacobian=False,
+                      custom_init=None):
         """Solve geodesic boundary problem.
 
         Compute the parameterized function for the geodesic starting at
@@ -529,7 +531,8 @@ class DirichletMetric(RiemannianMetric):
             for ip, ep in zip(initial_point, end_point):
                 niter += 1
                 t0 = time.time()
-                geodesic_init = initialize(ip, ep)
+                geodesic_init = initialize(ip, ep) if custom_init is None\
+                    else custom_init(ip, ep)
 
                 def bc(y0, y1, ip=ip, ep=ep):
                     return boundary_cond(y0, y1, ip, ep)
@@ -557,7 +560,7 @@ class DirichletMetric(RiemannianMetric):
                     target=process_function, args=(return_dict,))
                 p.start()
 
-                p.join(30)
+                p.join(TIMER)
                 if p.is_alive():
                     p.terminate()
                     print('Too long, process terminated.')
@@ -565,11 +568,29 @@ class DirichletMetric(RiemannianMetric):
                 else:
                     geod = return_dict[0]
 
+            condition = (len(initial_point) == 1 and
+                         gs.linalg.norm(initial_point - end_point) > 1e-5)
+            if condition:
+                velocity = n_steps * (geod[0][1:] - geod[0][:-1])
+                velocity_norm = self.norm(velocity, geod[0][:-1])
+                norm_gap = (velocity_norm.max() - velocity_norm.min()) \
+                    / velocity_norm.min()
+                condition_1 = gs.all(geod[0] > 0)
+                condition_2 = (norm_gap < 0.5)
+                if not condition_1:
+                    print('The solution leaves the manifold')
+                    # geod[0] = np.nan * geod[0]
+                if not condition_2:
+                    print('The solution is not a geodesic: max '
+                          'norm gap is {}'.format(norm_gap))
+                    # geod[0] = np.nan * geod[0]
+
             return geod[0] if len(initial_point) == 1 else gs.stack(geod)
 
         return path
 
-    def log(self, point, base_point, n_steps=N_STEPS, jacobian=False):
+    def log(self, point, base_point, n_steps=N_STEPS, jacobian=False,
+            custom_init=None):
         """Compute the logarithm map.
 
         Compute logarithm map associated to the Fisher information metric by
@@ -595,14 +616,15 @@ class DirichletMetric(RiemannianMetric):
         stop_time = 1.
         t = gs.linspace(0, stop_time, n_steps)
         geodesic = self._geodesic_bvp(
-            initial_point=base_point, end_point=point, jacobian=jacobian)
+            initial_point=base_point, end_point=point, jacobian=jacobian,
+            custom_init=custom_init)
         geodesic_at_t = geodesic(t)
         log = n_steps * (geodesic_at_t[..., 1, :] - geodesic_at_t[..., 0, :])
 
         return gs.squeeze(gs.stack(log))
 
-    def geodesic(self, initial_point,
-                 end_point=None, initial_tangent_vec=None):
+    def geodesic(self, initial_point, end_point=None, initial_tangent_vec=None,
+                 jacobian=False, custom_init=None):
         """Generate parameterized function for the geodesic curve.
 
         Geodesic curve defined by either:
@@ -636,7 +658,9 @@ class DirichletMetric(RiemannianMetric):
             if initial_tangent_vec is not None:
                 raise ValueError('Cannot specify both an end point '
                                  'and an initial tangent vector.')
-            path = self._geodesic_bvp(initial_point, end_point)
+            path = self._geodesic_bvp(
+                initial_point, end_point, jacobian=jacobian,
+                custom_init=custom_init)
 
         if initial_tangent_vec is not None:
             path = self._geodesic_ivp(initial_point, initial_tangent_vec)
