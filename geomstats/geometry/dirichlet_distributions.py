@@ -540,11 +540,14 @@ class DirichletMetric(RiemannianMetric):
                 def process_function(return_dict):
                     if jacobian:
                         solution = solve_bvp(
-                            bvp, bc, t, geodesic_init, fun_jac=jac, verbose=0)
+                            bvp, bc, t, geodesic_init, fun_jac=jac, verbose=2,
+                            max_nodes=10000)
                     else:
                         solution = solve_bvp(
-                            bvp, bc, t, geodesic_init, verbose=0)
+                            bvp, bc, t, geodesic_init, verbose=2,
+                            max_nodes=10000)
                     solution_at_t = solution.sol(t)
+                    print(solution.status)
                     geodesic = solution_at_t[:self.dim, :]
                     geod.append(gs.transpose(geodesic))
 
