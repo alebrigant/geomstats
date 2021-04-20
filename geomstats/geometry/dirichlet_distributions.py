@@ -16,7 +16,7 @@ from geomstats.geometry.euclidean import Euclidean
 from geomstats.geometry.riemannian_metric import RiemannianMetric
 
 N_STEPS = 100
-TIMER = 30
+TIMER = 300
 
 
 class DirichletDistributions(EmbeddedManifold):
@@ -533,6 +533,7 @@ class DirichletMetric(RiemannianMetric):
                 t0 = time.time()
                 geodesic_init = initialize(ip, ep) if custom_init is None\
                     else custom_init(ip, ep)
+                print(geodesic_init.shape)
 
                 def bc(y0, y1, ip=ip, ep=ep):
                     return boundary_cond(y0, y1, ip, ep)
@@ -586,6 +587,9 @@ class DirichletMetric(RiemannianMetric):
                 if not condition_2:
                     print('The solution is not a geodesic: max '
                           'norm gap is {}'.format(norm_gap))
+                else:
+                    print('Max variation of velocity norm is '
+                          '{} percent'.format(norm_gap * 100))
                     # geod[0] = np.nan * geod[0]
 
             return geod[0] if len(initial_point) == 1 else gs.stack(geod)
