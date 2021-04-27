@@ -16,7 +16,7 @@ from geomstats.geometry.euclidean import Euclidean
 from geomstats.geometry.riemannian_metric import RiemannianMetric
 
 N_STEPS = 100
-TIMER = 300
+TIMER = 30
 
 
 class DirichletDistributions(EmbeddedManifold):
@@ -527,13 +527,13 @@ class DirichletMetric(RiemannianMetric):
                 lin_init[self.dim:, -1] = lin_init[self.dim:, -2]
                 return lin_init
 
+            status = 0
             niter = 0
             for ip, ep in zip(initial_point, end_point):
                 niter += 1
                 t0 = time.time()
                 geodesic_init = initialize(ip, ep) if custom_init is None\
                     else custom_init(ip, ep)
-                print(geodesic_init.shape)
 
                 def bc(y0, y1, ip=ip, ep=ep):
                     return boundary_cond(y0, y1, ip, ep)
@@ -541,14 +541,14 @@ class DirichletMetric(RiemannianMetric):
                 def process_function(return_dict):
                     if jacobian:
                         solution = solve_bvp(
-                            bvp, bc, t, geodesic_init, fun_jac=jac, verbose=2,
+                            bvp, bc, t, geodesic_init, fun_jac=jac, verbose=0,
                             max_nodes=10000)
                     else:
                         solution = solve_bvp(
-                            bvp, bc, t, geodesic_init, verbose=2,
+                            bvp, bc, t, geodesic_init, verbose=0,
                             max_nodes=10000)
                     solution_at_t = solution.sol(t)
-                    print(solution.status)
+                    # print(solution.status)
                     geodesic = solution_at_t[:self.dim, :]
                     geod.append(gs.transpose(geodesic))
 
@@ -569,10 +569,11 @@ class DirichletMetric(RiemannianMetric):
                     p.terminate()
                     print('Too long, process terminated.')
                     geod.append(gs.zeros((n_steps, self.dim)))
+                    status = 1
                 else:
                     geod = return_dict[0]
 
-            condition = (len(initial_point) == 1 and
+            condition = (len(initial_point) == 1 and status == 0 and
                          gs.linalg.norm(initial_point - end_point) > 1e-5)
             if condition:
                 velocity = n_steps * (geod[0][1:] - geod[0][:-1])
@@ -583,17 +584,19 @@ class DirichletMetric(RiemannianMetric):
                 condition_2 = (norm_gap < 0.5)
                 if not condition_1:
                     print('The solution leaves the manifold')
+                    status = 2
                     # geod[0] = np.nan * geod[0]
                 if not condition_2:
                     print('The solution is not a geodesic: max '
                           'norm gap is {}'.format(norm_gap))
+                    status = 3
                 else:
                     print('Max variation of velocity norm is '
                           '{} percent'.format(norm_gap * 100))
                     # geod[0] = np.nan * geod[0]
 
-            return geod[0] if len(initial_point) == 1 else gs.stack(geod)
-
+            res = geod[0] if len(initial_point) == 1 else gs.stack(geod)
+            return res, status
         return path
 
     def log(self, point, base_point, n_steps=N_STEPS, jacobian=False,
@@ -625,10 +628,10 @@ class DirichletMetric(RiemannianMetric):
         geodesic = self._geodesic_bvp(
             initial_point=base_point, end_point=point, jacobian=jacobian,
             custom_init=custom_init)
-        geodesic_at_t = geodesic(t)
+        geodesic_at_t, status = geodesic(t)
         log = n_steps * (geodesic_at_t[..., 1, :] - geodesic_at_t[..., 0, :])
 
-        return gs.squeeze(gs.stack(log))
+        return gs.squeeze(gs.stack(log)), status
 
     def geodesic(self, initial_point, end_point=None, initial_tangent_vec=None,
                  jacobian=False, custom_init=None):
