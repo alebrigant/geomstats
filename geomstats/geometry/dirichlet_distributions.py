@@ -411,7 +411,7 @@ class DirichletMetric(RiemannianMetric):
         return exp
 
     def _geodesic_bvp(self, initial_point, end_point, jacobian=False,
-                      custom_init=None):
+                      custom_init=None, timer=TIMER):
         """Solve geodesic boundary problem.
 
         Compute the parameterized function for the geodesic starting at
@@ -564,7 +564,7 @@ class DirichletMetric(RiemannianMetric):
                     target=process_function, args=(return_dict,))
                 p.start()
 
-                p.join(TIMER)
+                p.join(timer)
                 if p.is_alive():
                     p.terminate()
                     print('Too long, process terminated.')
@@ -587,12 +587,12 @@ class DirichletMetric(RiemannianMetric):
                     status = 2
                     # geod[0] = np.nan * geod[0]
                 if not condition_2:
-                    print('The solution is not a geodesic: max '
-                          'norm gap is {}'.format(norm_gap))
+                    # print('The solution is not a geodesic: max variation'
+                    #       'of velocity norm is {}'.format(norm_gap * 100))
                     status = 3
-                else:
-                    print('Max variation of velocity norm is '
-                          '{} percent'.format(norm_gap * 100))
+                # else:
+                    # print('Max variation of velocity norm is '
+                    #       '{} percent'.format(norm_gap * 100))
                     # geod[0] = np.nan * geod[0]
 
             res = geod[0] if len(initial_point) == 1 else gs.stack(geod)
@@ -634,7 +634,7 @@ class DirichletMetric(RiemannianMetric):
         return gs.squeeze(gs.stack(log)), status
 
     def geodesic(self, initial_point, end_point=None, initial_tangent_vec=None,
-                 jacobian=False, custom_init=None):
+                 jacobian=False, custom_init=None, timer=TIMER):
         """Generate parameterized function for the geodesic curve.
 
         Geodesic curve defined by either:
@@ -670,7 +670,7 @@ class DirichletMetric(RiemannianMetric):
                                  'and an initial tangent vector.')
             path = self._geodesic_bvp(
                 initial_point, end_point, jacobian=jacobian,
-                custom_init=custom_init)
+                custom_init=custom_init, timer=timer)
 
         if initial_tangent_vec is not None:
             path = self._geodesic_ivp(initial_point, initial_tangent_vec)

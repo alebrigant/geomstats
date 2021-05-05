@@ -112,7 +112,7 @@ BACKEND_ATTRIBUTES = {
         'zeros_like'
     ],
     'autograd': [
-        'elementwise_grad', 'grad', 'jacobian', 'value_and_grad'],
+        'elementwise_grad', 'grad', 'jacobian', 'value_and_grad', 'hessian'],
     'linalg': [
         'det',
         'eig',
